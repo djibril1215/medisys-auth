@@ -68,4 +68,23 @@ const login = async (req, res) => {
   }
 };
 
-module.exports = { register, login };
+// Profil utilisateur connecté (route protégée)
+const getProfile = async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, nom, email, role, created_at FROM users WHERE id = $1',
+      [req.user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Utilisateur non trouvé.' });
+    }
+
+    res.status(200).json({ user: result.rows[0] });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erreur serveur.' });
+  }
+};
+
+module.exports = { register, login, getProfile };
