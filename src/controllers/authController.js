@@ -2,12 +2,21 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const pool = require('../config/db');
 
-// Inscription
+// Inscription (reservee au super_admin via la route protegee)
 const register = async (req, res) => {
-  const { nom, email, mot_de_passe, role } = req.body;
+  const { nom, email, mot_de_passe, role, hopital_id } = req.body;
 
-  if (!nom || !email || !mot_de_passe) {
-    return res.status(400).json({ message: 'Nom, email et mot de passe sont requis.' });
+  if (!nom || !email || !mot_de_passe || !role) {
+    return res.status(400).json({ message: 'Nom, email, mot de passe et role sont requis.' });
+  }
+
+  const rolesValides = ['medecin', 'urgentiste', 'infirmier', 'super_admin'];
+  if (!rolesValides.includes(role)) {
+    return res.status(400).json({ message: 'Role invalide.' });
+  }
+
+  if (role !== 'super_admin' && !hopital_id) {
+    return res.status(400).json({ message: "hopital_id est requis pour ce role." });
   }
 
   try {
@@ -19,8 +28,8 @@ const register = async (req, res) => {
     const hashedPassword = await bcrypt.hash(mot_de_passe, 10);
 
     const newUser = await pool.query(
-      'INSERT INTO users (nom, email, mot_de_passe, role) VALUES ($1, $2, $3, $4) RETURNING id, nom, email, role, created_at',
-      [nom, email, hashedPassword, role || 'personnel']
+      'INSERT INTO users (nom, email, mot_de_passe, role, hopital_id) VALUES ($1, $2, $3, $4, $5) RETURNING id, nom, email, role, hopital_id, created_at',
+      [nom, email, hashedPassword, role, hopital_id || null]
     );
 
     res.status(201).json({ message: 'Utilisateur créé avec succès.', user: newUser.rows[0] });
@@ -52,7 +61,7 @@ const login = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role },
+      { id: user.id, email: user.email, role: user.role, hopital_id: user.hopital_id },
       process.env.JWT_SECRET,
       { expiresIn: process.env.JWT_EXPIRES_IN }
     );
@@ -60,7 +69,13 @@ const login = async (req, res) => {
     res.status(200).json({
       message: 'Connexion réussie.',
       token,
-      user: { id: user.id, nom: user.nom, email: user.email, role: user.role },
+      user: {
+        id: user.id,
+        nom: user.nom,
+        email: user.email,
+        role: user.role,
+        hopital_id: user.hopital_id,
+      },
     });
   } catch (error) {
     console.error(error);
@@ -68,11 +83,11 @@ const login = async (req, res) => {
   }
 };
 
-// Profil utilisateur connecté (route protégée)
+// Profil utilisateur connecte (route protegee)
 const getProfile = async (req, res) => {
   try {
     const result = await pool.query(
-      'SELECT id, nom, email, role, created_at FROM users WHERE id = $1',
+      'SELECT id, nom, email, role, hopital_id, created_at FROM users WHERE id = $1',
       [req.user.id]
     );
 
@@ -87,4 +102,17 @@ const getProfile = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getProfile };
+// Liste du personnel medical d'un hopital (reserve au super_admin, pour l'administration)
+const getAllUsers = async (req, res) => {
+  try {
+    const result = await pool.query(
+      'SELECT id, nom, email, role, hopital_id, created_at FROM users ORDER BY created_at DESC'
+    );
+    res.status(200).json({ users: result.rows });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erreur serveur.' });
+  }
+};
+
+module.exports = { register, login, getProfile, getAllUsers };
