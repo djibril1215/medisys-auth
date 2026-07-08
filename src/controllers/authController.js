@@ -116,3 +116,27 @@ const getAllUsers = async (req, res) => {
 };
 
 module.exports = { register, login, getProfile, getAllUsers };
+
+// Supprimer un utilisateur - reserve au super_admin
+const deleteUser = async (req, res) => {
+  const { id } = req.params;
+
+  if (parseInt(id) === req.user.id) {
+    return res.status(400).json({ message: 'Vous ne pouvez pas supprimer votre propre compte.' });
+  }
+
+  try {
+    const result = await pool.query('DELETE FROM users WHERE id = $1 RETURNING id, nom, email', [id]);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ message: 'Utilisateur non trouvé.' });
+    }
+
+    res.status(200).json({ message: 'Utilisateur supprimé avec succès.' });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ message: 'Erreur serveur lors de la suppression.' });
+  }
+};
+
+module.exports.deleteUser = deleteUser;
