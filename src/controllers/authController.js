@@ -1,10 +1,12 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
+const axios = require('axios');
 const pool = require('../config/db');
 
 // Inscription (reservee au super_admin via la route protegee)
 const register = async (req, res) => {
   const { nom, email, mot_de_passe, role, hopital_id } = req.body;
+  const token = req.headers['authorization'].split(' ')[1];
 
   if (!nom || !email || !mot_de_passe || !role) {
     return res.status(400).json({ message: 'Nom, email, mot de passe et role sont requis.' });
@@ -32,7 +34,35 @@ const register = async (req, res) => {
       [nom, email, hashedPassword, role, hopital_id || null]
     );
 
-    res.status(201).json({ message: 'Utilisateur créé avec succès.', user: newUser.rows[0] });
+    const user = newUser.rows[0];
+
+    // Creation automatique de la fiche personnel (sauf pour le super_admin, qui n'appartient a aucun hopital)
+    if (role !== 'super_admin') {
+      try {
+        const [prenom, ...resteNom] = nom.split(' ').reverse();
+        await axios.post(
+          `${process.env.PERSONNEL_SERVICE_URL}/api/personnel/internal/from-auth`,
+          {
+            nom: resteNom.reverse().join(' ') || nom,
+            prenom: resteNom.length ? prenom : '',
+            email,
+            role,
+            hopital_id,
+            user_id: user.id,
+          },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+      } catch (syncError) {
+        // Si la synchronisation echoue, on annule la creation du compte pour eviter un compte orphelin
+        await pool.query('DELETE FROM users WHERE id = $1', [user.id]);
+        console.error('Erreur de synchronisation avec medisys-personnel :', syncError.message);
+        return res.status(500).json({
+          message: "Le compte n'a pas pu etre synchronise avec le service Personnel. Aucun compte n'a ete cree.",
+        });
+      }
+    }
+
+    res.status(201).json({ message: 'Utilisateur créé avec succès.', user });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: 'Erreur serveur lors de l\'inscription.' });
@@ -83,7 +113,7 @@ const login = async (req, res) => {
   }
 };
 
-// Profil utilisateur connecte (route protegee)
+// Profil utilisateur connecte
 const getProfile = async (req, res) => {
   try {
     const result = await pool.query(
@@ -102,7 +132,6 @@ const getProfile = async (req, res) => {
   }
 };
 
-// Liste du personnel medical d'un hopital (reserve au super_admin, pour l'administration)
 const getAllUsers = async (req, res) => {
   try {
     const result = await pool.query(
@@ -115,11 +144,10 @@ const getAllUsers = async (req, res) => {
   }
 };
 
-module.exports = { register, login, getProfile, getAllUsers };
-
-// Supprimer un utilisateur - reserve au super_admin
+// Supprimer un utilisateur - reserve au super_admin, supprime aussi la fiche personnel liee
 const deleteUser = async (req, res) => {
   const { id } = req.params;
+  const token = req.headers['authorization'].split(' ')[1];
 
   if (parseInt(id) === req.user.id) {
     return res.status(400).json({ message: 'Vous ne pouvez pas supprimer votre propre compte.' });
@@ -132,6 +160,15 @@ const deleteUser = async (req, res) => {
       return res.status(404).json({ message: 'Utilisateur non trouvé.' });
     }
 
+    try {
+      await axios.delete(
+        `${process.env.PERSONNEL_SERVICE_URL}/api/personnel/internal/by-user/${id}`,
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+    } catch (syncError) {
+      console.error('Erreur lors de la suppression de la fiche personnel :', syncError.message);
+    }
+
     res.status(200).json({ message: 'Utilisateur supprimé avec succès.' });
   } catch (error) {
     console.error(error);
@@ -139,4 +176,4 @@ const deleteUser = async (req, res) => {
   }
 };
 
-module.exports.deleteUser = deleteUser;
+module.exports = { register, login, getProfile, getAllUsers, deleteUser };
